@@ -46,18 +46,23 @@ class Memory:
         self.inactive_list = []
 
     def writeback(self, disk):
-        # TODO: Write file to storage with disk bandwidth
-        # TODO: reduce dirty data
+        # Write file to storage with disk bandwidth
+        # reduce dirty data
 
         pass
 
     def evict(self, amount):
-        # TODO: remove oldest data in inactive list
+        # remove oldest data from inactive list
         pass
 
     def balance_lru_lists(self):
-        # TODO: move older data from active to inactive list
+        # move old data from active to inactive list
         pass
+
+    def data_in_cache(self, filename):
+        active = [item[2] for item in self.active_list if item[0] == filename]
+        inactive = [item[2] for item in self.inactive_list if item[0] == filename]
+        return active, inactive
 
 
 class Storage:
@@ -78,14 +83,23 @@ storage = Storage(200 * pow(2, 10))
 
 
 def read(file):
-    # TODO: get system info
-        # TODO: amount of data is in cache (active and inactive)
-        # TODO: amount of cache used
-        # TODO: amount of free memory
+    run_time = 0
 
-    # TODO: Read until cache is full and update active/inactive list at the same time
-    # TODO: Then read and evict inactive list at the same time
-    # TODO: balance active and inactive list
+    # Read until free memory is up
+    while memory.free > 0:
+        # if data is in cache:
+        if file.cache == file.size:
+            # Move data to active list
+            # Balance active and inactive list
+            return file.size / memory.read_bw
+
+        if file.cache < file.size:
+            run_time += (file.size - file.cache) / storage.read_bw
+
+    # check if data is in inactive list
+    # update active/inactive list at the same time
+    # Then read and evict inactive list at the same time
+    # balance active and inactive list
 
     # if file.size == file.cache:
     #     file.cache = file.size
@@ -102,13 +116,8 @@ def read(file):
 
 
 def write(file):
-    # TODO: get system info
-        # TODO: amount of data is in cache (active and inactive)
-        # TODO: amount of cache used
-        # TODO: amount of free memory
-
-    # TODO: write with memory bandwidth until dirty_ratio is reached, update active/inactive list
-    # TODO: write with disk bandwidth, evict inactive data, add data to inactive list
+    # write with memory bandwidth until dirty_ratio is reached, update active/inactive list
+    # write with disk bandwidth, evict inactive data, add data to inactive list
 
     # file.cache = file.size
     # return file.size / storage.write_bw
@@ -116,3 +125,13 @@ def write(file):
 
 
 file1 = File("file1", 6010, 6010)
+file2 = File("file2", 6010, 6010)
+file3 = File("file3", 6010, 6010)
+file4 = File("file4", 6010, 6010)
+
+task1_read = read(file1)
+task1_write = write(file2)
+task2_read = read(file2)
+task2_write = write(file3)
+task3_read = read(file3)
+task3_write = write(file4)
