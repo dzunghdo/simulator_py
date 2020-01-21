@@ -42,8 +42,8 @@ class Memory:
         self.write_bw = write_bw
         self.dirty_ratio = 20
         self.dirty_bg_ratio = 10
-        self.active_list = []
-        self.inactive_list = []
+        # self.active_list = []
+        # self.inactive_list = []
 
     def writeback(self, disk):
         # Write file to storage with disk bandwidth
@@ -59,10 +59,10 @@ class Memory:
         # move old data from active to inactive list
         pass
 
-    def data_in_cache(self, filename):
-        active = [item[2] for item in self.active_list if item[0] == filename]
-        inactive = [item[2] for item in self.inactive_list if item[0] == filename]
-        return active, inactive
+    # def data_in_cache(self, filename):
+    # active = [item[2] for item in self.active_list if item[0] == filename]
+    # inactive = [item[2] for item in self.inactive_list if item[0] == filename]
+    # return active, inactive
 
 
 class Storage:
@@ -78,50 +78,66 @@ class Storage:
         self.write_bw = write_bw
 
 
+class Kernel:
+    def __init__(self, memory_, storage_):
+        self.memory = memory_
+        self.storage = storage_
+
+    def read(self, file):
+        run_time = 0
+
+        # Read until free memory is up
+        while memory.free > 0:
+            # if data is in cache:
+            if file.cache == file.size:
+                # Move data to active list
+                # Balance active and inactive list
+                return file.size / memory.read_bw
+
+            if file.cache < file.size:
+                run_time += (file.size - file.cache) / storage.read_bw
+
+        # check if data is in inactive list
+        # update active/inactive list at the same time
+        # Then read and evict inactive list at the same time
+        # balance active and inactive list
+
+        # if file.size == file.cache:
+        #     file.cache = file.size
+        #     return file.size / memory.read_bw
+        #
+        # if 0 < file.cache < file.size:
+        #     file.cache = file.size
+        #     return file.cache / memory.read_bw + (file.size - file.cache) / storage.read_bw
+        #
+        # if file.cache == 0:
+        #     file.cache = file.size
+        #     return file.size / storage.read_bw
+        return run_time
+
+    def write(self, file):
+        # write with memory bandwidth until dirty_ratio is reached, update active/inactive list
+        # write with disk bandwidth, evict inactive data, add data to inactive list
+
+        # file.cache = file.size
+        # return file.size / storage.write_bw
+        pass
+        return 0
+
+    def evict(self, amount):
+        return 0
+
+    def flush(self):
+        return 0
+
+    def compute(self):
+        return 0
+
+
 memory = Memory(14.5 * pow(2, 10), 14.5 * pow(2, 10), 6000, 3200)
 storage = Storage(200 * pow(2, 10))
+kernel = Kernel(memory, storage)
 
-
-def read(file):
-    run_time = 0
-
-    # Read until free memory is up
-    while memory.free > 0:
-        # if data is in cache:
-        if file.cache == file.size:
-            # Move data to active list
-            # Balance active and inactive list
-            return file.size / memory.read_bw
-
-        if file.cache < file.size:
-            run_time += (file.size - file.cache) / storage.read_bw
-
-    # check if data is in inactive list
-    # update active/inactive list at the same time
-    # Then read and evict inactive list at the same time
-    # balance active and inactive list
-
-    # if file.size == file.cache:
-    #     file.cache = file.size
-    #     return file.size / memory.read_bw
-    #
-    # if 0 < file.cache < file.size:
-    #     file.cache = file.size
-    #     return file.cache / memory.read_bw + (file.size - file.cache) / storage.read_bw
-    #
-    # if file.cache == 0:
-    #     file.cache = file.size
-    #     return file.size / storage.read_bw
-    pass
-
-
-def write(file):
-    # write with memory bandwidth until dirty_ratio is reached, update active/inactive list
-    # write with disk bandwidth, evict inactive data, add data to inactive list
-
-    # file.cache = file.size
-    # return file.size / storage.write_bw
-    pass
 
 
 file1 = File("file1", 6010, 6010)
