@@ -161,10 +161,10 @@ class Kernel:
             run_time += file.cache / self.memory.read_bw
             print("%.2f Read %d MB from cache" % (run_time, file.cache))
 
-            # mem used by application
-            self.memory.free -= file.size
+        # mem used by application
+        self.memory.free -= file.size
 
-            self.memory.add_log(run_time)
+        self.memory.add_log(run_time)
 
         return run_time
 
