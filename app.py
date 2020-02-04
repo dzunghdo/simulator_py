@@ -1,9 +1,9 @@
 # i/o simulator in python
 import plot
-from simulator import Kernel
-from simulator import File
-from simulator import Storage
-from simulator import Memory
+from components import Kernel
+from components import File
+from components import Storage
+from components import Memory
 
 memory = Memory(14.5 * pow(2, 10), 14.5 * pow(2, 10), read_bw=6000, write_bw=3200)
 storage = Storage(200 * pow(2, 10), read_bw=250, write_bw=160)

@@ -154,16 +154,19 @@ class Kernel:
             file.cache += from_disk
 
             # time to read from disk
-            run_time += from_disk / self.storage.read_bw
-            print("%.2f Read %d MB from disk" % (run_time, from_disk))
+            disk_read_time = from_disk / self.storage.read_bw
+            run_time += disk_read_time
+            print("\tRead %d MB from disk in %.2f sec" % (from_disk, disk_read_time))
 
         else:
-            run_time += file.cache / self.memory.read_bw
-            print("%.2f Read %d MB from cache" % (run_time, file.cache))
+            mem_read_time = file.cache / self.memory.read_bw
+            run_time += mem_read_time
+            print("\tRead %d MB from cache in %.2f sec" % (file.cache, mem_read_time))
 
         # mem used by application
         self.memory.free -= file.size
 
+        print("%.2f File %s is read" % (run_time, file.name))
         self.memory.add_log(run_time)
 
         return run_time
@@ -190,9 +193,10 @@ class Kernel:
             file.dirty = free_amt
             file.cache += free_amt
             self.memory.write(amount=free_amt, max_cache=max_cache, new_dirty=free_amt)
-            run_time += free_amt / self.memory.write_bw
+            free_write_time = free_amt / self.memory.write_bw
+            run_time += free_write_time
             self.memory.add_log(run_time)
-            print("%.2f Freely write %d MB " % (run_time, free_amt))
+            print("\tFreely write %d MB in %.2f sec" % (free_amt, free_write_time))
 
         if file.cache == file.size:
             return run_time
@@ -209,9 +213,12 @@ class Kernel:
         written_amt = min(self.memory.free, throttled_amt)
         self.memory.write(amount=written_amt, max_cache=max_cache, new_dirty=0)
         file.cache += written_amt
-        run_time += written_amt / self.storage.write_bw
+
+        throttled_write_time = written_amt / self.storage.write_bw
+        run_time += throttled_write_time
         self.memory.add_log(run_time)
-        print("%.2f Throttled write %d MB " % (run_time, written_amt))
+        print("\tThrottled write %d MB in %.2f sec" % (written_amt, throttled_write_time))
+        print("%.2f File %s is written " % (run_time, file.name))
 
         return run_time
 
@@ -226,5 +233,5 @@ class Kernel:
     def release(self, file):
         self.memory.free += file.cache
 
-    def compute(self):
-        return 0
+    def compute(self, time, cpu_time=0):
+        return time + cpu_time
