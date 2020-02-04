@@ -1,6 +1,3 @@
-# i/o simulator in python
-
-
 class File:
     """
     File class.
@@ -46,9 +43,20 @@ class Memory:
         self.write_bw = write_bw
         # self.active_list = []
         # self.inactive_list = []
+        self.log = {
+            "total": [self.size],
+            "free": [self.free],
+            "cache": [self.cache],
+            "dirty": [self.dirty],
+            "used": [self.size - self.free],
+            "time": [0]
+        }
 
     def get_available_memory(self):
         return self.free + self.cache - self.dirty
+
+    def get_log(self):
+        return self.log
 
     def evict(self, amount):
         evictable = self.cache - self.dirty
@@ -63,9 +71,12 @@ class Memory:
         self.cache += amount
         self.free -= amount
 
-    def write(self, amount, dirty):
-        self.cache += amount
-        self.dirty += dirty
+    def write(self, amount, max_cache, new_dirty):
+        if self.cache + amount > max_cache:
+            self.cache = max_cache
+        else:
+            self.cache += amount
+        self.dirty += new_dirty
         self.free -= amount
 
     def balance_lru_lists(self):
@@ -77,12 +88,20 @@ class Memory:
     # inactive = [item[2] for item in self.inactive_list if item[0] == filename]
     # return active, inactive
 
-    def log(self):
+    def print(self):
         print("Memory status:")
         print("\t Total: %.2f" % self.size)
         print("\t Free: %.2f" % self.free)
         print("\t Cache: %.2f" % self.cache)
         print("\t Dirty: %.2f" % self.dirty)
+
+    def add_log(self, time):
+        self.log["time"].append(time)
+        self.log["total"].append(self.size)
+        self.log["free"].append(self.free)
+        self.log["used"].append(self.size - self.free)
+        self.log["cache"].append(self.cache)
+        self.log["dirty"].append(self.dirty)
 
 
 class Storage:
@@ -105,77 +124,94 @@ class Kernel:
         self.dirty_ratio = 0.2
         self.dirty_bg_ratio = 0.1
 
-    def read(self, file):
-        run_time = 0
-
+    def read(self, file, run_time=0):
+        print("%.2f Start reading %s" % (run_time, file.name))
+        self.memory.add_log(run_time)
         # periodical flushing
         # periodical eviction
 
-        mem_required = max(0, 2 * file.size - file.cache - memory.get_available_memory())
-        # Flush if not enough memory
+        mem_required = max(0, 2 * file.size - file.cache - self.memory.get_available_memory())
+        # Flush if not enough available memory
         if mem_required > 0:
             run_time += self.flush(mem_required)
 
-        # if memory is not enough after flushing
-        mem_required = max(0, 2 * file.size - file.cache - memory.free)
+        # if free memory is not enough after flushing
+        mem_required = max(0, 2 * file.size - file.cache - self.memory.free)
         if mem_required > 0:
             run_time += self.evict(mem_required)
 
         # amount of data read from disk
         from_disk = file.size - file.cache
+
         # Read from disk
         if from_disk > 0:
+
             # read to cache
-            memory.read(from_disk)
+            self.memory.read(from_disk)
+
             # update file status
             file.disk -= from_disk
             file.cache += from_disk
-            # time to read from disk
-            run_time += from_disk / storage.read_bw
-        else:
-            run_time += file.cache / memory.read_bw
 
-        # memory used by app
-        memory.free -= file.size
+            # time to read from disk
+            run_time += from_disk / self.storage.read_bw
+            print("%.2f Read %d MB from disk" % (run_time, from_disk))
+
+        else:
+            run_time += file.cache / self.memory.read_bw
+            print("%.2f Read %d MB from cache" % (run_time, file.cache))
+
+            # mem used by application
+            self.memory.free -= file.size
+
+            self.memory.add_log(run_time)
 
         return run_time
 
-    def write(self, file):
-        run_time = 0
+    def write(self, file, run_time=0):
+        print("%.2f Start writing %s " % (run_time, file.name))
+        self.memory.add_log(run_time)
 
         # periodical flushing
         # periodical eviction
 
-        cache_required = max(0, file.size - file.cache - memory.get_available_memory())
+        max_cache = self.memory.size - file.size
+
+        cache_required = max(0, file.size - file.cache - self.memory.get_available_memory())
         if cache_required > 0:
-            memory.evict(cache_required)
+            self.memory.evict(cache_required)
 
         # free write amount
-        dirty_thres = self.dirty_ratio * memory.get_available_memory()
-        free_amt = min(memory.free, file.size, dirty_thres - memory.dirty)
+        dirty_thres = self.dirty_ratio * self.memory.get_available_memory()
+        free_amt = min(self.memory.free, file.size, dirty_thres - self.memory.dirty)
 
         if free_amt > 0:
+            # write to cache with memory bw
             file.dirty = free_amt
             file.cache += free_amt
-            memory.write(amount=free_amt, dirty=free_amt)
-            run_time += free_amt / memory.write_bw
+            self.memory.write(amount=free_amt, max_cache=max_cache, new_dirty=free_amt)
+            run_time += free_amt / self.memory.write_bw
+            self.memory.add_log(run_time)
+            print("%.2f Freely write %d MB " % (run_time, free_amt))
 
         if file.cache == file.size:
             return run_time
 
         # throttled write before memory is used up
-        throttled_amt = min(file.size - free_amt, memory.get_available_memory())
+        throttled_amt = min(file.size - free_amt, self.memory.get_available_memory())
 
         # evict data if there is not enough free mem
-        mem_required = max(throttled_amt - memory.free, 0)
+        mem_required = max(throttled_amt - self.memory.free, 0)
         if mem_required > 0:
-            memory.evict(mem_required)
+            self.memory.evict(mem_required)
 
         # write data with enough free memory and throttled bw
-        written_amt = min(memory.free, throttled_amt)
-        memory.write(amount=written_amt, dirty=0)
+        written_amt = min(self.memory.free, throttled_amt)
+        self.memory.write(amount=written_amt, max_cache=max_cache, new_dirty=0)
         file.cache += written_amt
-        run_time += written_amt / storage.write_bw
+        run_time += written_amt / self.storage.write_bw
+        self.memory.add_log(run_time)
+        print("%.2f Throttled write %d MB " % (run_time, written_amt))
 
         return run_time
 
@@ -187,33 +223,8 @@ class Kernel:
         self.memory.evict(amount)
         return 0
 
+    def release(self, file):
+        self.memory.free += file.cache
+
     def compute(self):
         return 0
-
-
-memory = Memory(14.5 * pow(2, 10), 14.5 * pow(2, 10), read_bw=6000, write_bw=3200)
-storage = Storage(200 * pow(2, 10), read_bw=250, write_bw=160)
-kernel = Kernel(memory, storage)
-
-file1 = File("file1", 6010, 6010)
-file2 = File("file2", 6010, 6010)
-file3 = File("file3", 6010, 6010)
-file4 = File("file4", 6010, 6010)
-
-task1_read = kernel.read(file1)
-print("Task1 read: %.2f" % task1_read)
-memory.log()
-task1_write = kernel.write(file2)
-print("Task2 write: %.2f" % task1_write)
-memory.log()
-task2_read = kernel.read(file2)
-print("Task2 read: %.2f" % task2_read)
-memory.log()
-# task2_write = kernel.write(file3)
-# print("Task2 write: %.2f" % task2_write)
-# memory.log()
-# task3_read = kernel.read(file3)
-# task3_write = kernel.write(file4)
-
-# print("Task2 read: %.2f" % task2_read)
-# memory.log()
