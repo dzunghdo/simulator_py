@@ -127,8 +127,10 @@ class Kernel:
     def read(self, file, run_time=0):
         print("%.2f Start reading %s" % (run_time, file.name))
         self.memory.add_log(run_time)
-        # periodical flushing
-        # periodical eviction
+
+        run_time += self.period_flush()
+        run_time += self.period_evict()
+        self.memory.add_log(run_time)
 
         mem_required = max(0, 2 * file.size - file.cache - self.memory.get_available_memory())
         # Flush if not enough available memory
@@ -175,8 +177,8 @@ class Kernel:
         print("%.2f Start writing %s " % (run_time, file.name))
         self.memory.add_log(run_time)
 
-        # periodical flushing
-        # periodical eviction
+        run_time += self.period_flush()
+        run_time += self.period_evict()
 
         max_cache = self.memory.size - file.size
 
@@ -200,6 +202,13 @@ class Kernel:
 
         if file.cache == file.size:
             return run_time
+
+        # not throttled write (before dirty_ratio is reach)
+        if self.memory.dirty < self.get_dirty_threshold():
+            # write dirty data
+            dirty_amt = self.get_dirty_threshold() - self.memory.dirty
+            self.memory.evict(dirty_amt)
+            self.memory.write(amount=dirty_amt, max_cache=max_cache, new_dirty=dirty_amt)
 
         # throttled write before memory is used up
         throttled_amt = min(file.size - free_amt, self.memory.get_available_memory())
@@ -230,8 +239,19 @@ class Kernel:
         self.memory.evict(amount)
         return 0
 
+    def period_flush(self):
+        flushing_time = self.memory.dirty / self.storage.write_bw
+        self.memory.flush(self.memory.dirty)
+        return flushing_time
+
+    def period_evict(self):
+        return 0
+
     def release(self, file):
         self.memory.free += file.cache
 
     def compute(self, time, cpu_time=0):
         return time + cpu_time
+
+    def get_dirty_threshold(self):
+        return self.memory.get_available_memory() * self.dirty_ratio
