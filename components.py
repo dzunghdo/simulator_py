@@ -1,3 +1,6 @@
+import time
+
+
 class File:
     """
     File class.
@@ -16,11 +19,20 @@ class File:
         """
         self.name = name
         self.size = size
-        self.disk = disk
-        self.cache = cache
+        # self.disk = disk
+        # self.dirty = dirty
+        # self.active = active
+        # self.inactive = inactive
+
+
+class Block:
+    """Data block of a File"""
+
+    def __init__(self, filename, size=0, dirty=False, accessed_time=0.0):
+        self.filename = filename
+        self.size = size
         self.dirty = dirty
-        self.active = active
-        self.inactive = inactive
+        self.accessed_time = accessed_time
 
 
 class Memory:
@@ -40,6 +52,8 @@ class Memory:
         self.cache = cache
         self.dirty = dirty
         self.read_bw = read_bw
+        self.active = []
+        self.inactive = []
         self.write_bw = write_bw
         # self.active_list = []
         # self.inactive_list = []
@@ -51,6 +65,25 @@ class Memory:
             "used": [self.size - self.free],
             "time": [0]
         }
+
+    def get_data_in_cache(self, filename):
+        """
+        Return the amount of data cached
+        :param filename:
+        :return:
+        """
+        amount = 0
+        for block in self.inactive:
+            if block.filename == filename:
+                amount += block.size
+                break
+
+        for block in self.active:
+            if block.filename == filename:
+                amount += block.size
+                break
+
+        return amount
 
     def get_available_memory(self):
         return self.free + self.cache - self.dirty
@@ -67,11 +100,54 @@ class Memory:
     def flush(self, amount):
         self.dirty -= amount
 
-    def read(self, amount):
+    def read_from_disk(self, amount, filename=None):
+        """
+        Read data not cached from disk. Add new read block to inactive list.
+        :param amount:
+        :param filename:
+        :return:
+        """
+
         self.cache += amount
         self.free -= amount
 
-    def write(self, amount, max_cache, new_dirty):
+        block = Block(filename=filename, size=amount, dirty=False, accessed_time=time.time())
+        self.inactive.append(block)
+        self.sort_lru_list()
+
+    def cache_read(self, filename):
+        """
+        Read data from cache. All data in cache is active
+        :param filename:
+        :return:
+        """
+
+        inactive_size = 0
+        for block in self.inactive:
+            if block.filename == filename:
+                inactive_size = block.size
+                self.inactive.remove(block)
+                break
+
+        active_block = None
+        for block in self.active:
+            if block.filename == filename:
+                active_block = block
+                break
+
+        # Update all accessed data as active
+        if active_block is not None:
+            active_block.size += inactive_size
+            active_block.accessed_time = time.time()
+        else:
+            active_block = Block(filename, inactive_size, dirty=False, accessed_time=time.time())
+            self.active.append(active_block)
+
+        self.sort_lru_list()
+
+    def write(self, filename, amount, max_cache, new_dirty):
+        """Write a file to disk through cache. The written file is not in cache. Thus, all data is in inactive list"""
+
         if self.cache + amount > max_cache:
             self.cache = max_cache
         else:
@@ -79,14 +155,17 @@ class Memory:
         self.dirty += new_dirty
         self.free -= amount
 
+        block = Block(filename, amount, dirty=False, accessed_time=time.time())
+        self.inactive.append(block)
+        self.sort_lru_list()
+
+    def sort_lru_list(self):
+        self.inactive = sorted(self.inactive, key=lambda block: block.accessed_time, reverse=True)
+        self.active = sorted(self.active, key=lambda block: block.accessed_time, reverse=True)
+
     def balance_lru_lists(self):
         # move old data from active to inactive list
         pass
-
-    # def data_in_cache(self, filename):
-    # active = [item[2] for item in self.active_list if item[0] == filename]
-    # inactive = [item[2] for item in self.inactive_list if item[0] == filename]
-    # return active, inactive
 
     def print(self):
         print("Memory status:")
@@ -128,42 +207,53 @@ class Kernel:
         print("%.2f Start reading %s" % (run_time, file.name))
         self.memory.add_log(run_time)
 
-        run_time += self.period_flush()
-        run_time += self.period_evict()
-        self.memory.add_log(run_time)
+        cached_amt = self.memory.get_data_in_cache(file.name)
+        from_disk = file.size - cached_amt
 
-        mem_required = max(0, 2 * file.size - file.cache - self.memory.get_available_memory())
+        # ============= FLUSHING - EVICTION ==========
+        # Memory required to accommodate file in cache and application used memory
+        mem_required = max(0, 2 * file.size - cached_amt - self.memory.get_available_memory())
         # Flush if not enough available memory
+        # This takes time to write dirty data to memory
         if mem_required > 0:
             run_time += self.flush(mem_required)
 
-        # if free memory is not enough after flushing
-        mem_required = max(0, 2 * file.size - file.cache - self.memory.free)
+        # if free memory is not enough after flushing, then evict old pages
+        # This doesn't take time
+        mem_required = max(0, 2 * file.size - cached_amt - self.memory.free)
         if mem_required > 0:
-            run_time += self.evict(mem_required)
+            # run_time += self.evict(mem_required)
+            self.evict(mem_required)
 
-        # amount of data read from disk
-        from_disk = file.size - file.cache
+        # =========== START READING ===========
+        # if part of file is cached, access pages in cache again to update LRU lists
+        if cached_amt > 0:
+            self.memory.cache_read(file.name)
 
-        # Read from disk
+        # Read from disk: if a part of file is read from disk, memory read is neglected.
         if from_disk > 0:
 
             # read to cache
-            self.memory.read(from_disk)
-
-            # update file status
-            file.disk -= from_disk
-            file.cache += from_disk
+            self.memory.read_from_disk(from_disk, file.name)
 
             # time to read from disk
             disk_read_time = from_disk / self.storage.read_bw
             run_time += disk_read_time
+
+            ## time for periodical flushing is taken into account
+            # flushing_time = self.period_flush(disk_read_time)
+            # run_time += flushing_time
+
             print("\tRead %d MB from disk in %.2f sec" % (from_disk, disk_read_time))
 
         else:
-            mem_read_time = file.cache / self.memory.read_bw
+            mem_read_time = cached_amt / self.memory.read_bw
             run_time += mem_read_time
-            print("\tRead %d MB from cache in %.2f sec" % (file.cache, mem_read_time))
+
+            # Periodical flushing doesn't take time during reading from cache
+            self.period_flush(mem_read_time)
+
+            print("\tRead %d MB from cache in %.2f sec" % (cached_amt, mem_read_time))
 
         # mem used by application
         self.memory.free -= file.size
@@ -177,12 +267,11 @@ class Kernel:
         print("%.2f Start writing %s " % (run_time, file.name))
         self.memory.add_log(run_time)
 
-        run_time += self.period_flush()
-        run_time += self.period_evict()
-
         max_cache = self.memory.size - file.size
+        cached_amt = self.memory.get_data_in_cache(file.name)
 
-        cache_required = max(0, file.size - file.cache - self.memory.get_available_memory())
+        # check if more cache is required for writing file
+        cache_required = max(0, file.size - cached_amt - self.memory.get_available_memory())
         if cache_required > 0:
             self.memory.evict(cache_required)
 
@@ -192,15 +281,16 @@ class Kernel:
 
         if free_amt > 0:
             # write to cache with memory bw
-            file.dirty = free_amt
-            file.cache += free_amt
-            self.memory.write(amount=free_amt, max_cache=max_cache, new_dirty=free_amt)
+            # file.dirty = free_amt
+            # file.cache += free_amt
+            self.memory.write(file.name, amount=free_amt, max_cache=max_cache, new_dirty=free_amt)
             free_write_time = free_amt / self.memory.write_bw
             run_time += free_write_time
+
             self.memory.add_log(run_time)
             print("\tFreely write %d MB in %.2f sec" % (free_amt, free_write_time))
 
-        if file.cache == file.size:
+        if cached_amt == file.size:
             return run_time
 
         # not throttled write (before dirty_ratio is reach)
@@ -220,8 +310,7 @@ class Kernel:
 
         # write data with enough free memory and throttled bw
         written_amt = min(self.memory.free, throttled_amt)
-        self.memory.write(amount=written_amt, max_cache=max_cache, new_dirty=0)
-        file.cache += written_amt
+        self.memory.write(file.name, amount=written_amt, max_cache=max_cache, new_dirty=0)
 
         throttled_write_time = written_amt / self.storage.write_bw
         run_time += throttled_write_time
@@ -239,18 +328,20 @@ class Kernel:
         self.memory.evict(amount)
         return 0
 
-    def period_flush(self):
-        flushing_time = self.memory.dirty / self.storage.write_bw
-        self.memory.flush(self.memory.dirty)
+    def period_flush(self, duration):
+        amount_flushed = min(self.memory.dirty, self.storage.write_bw * duration)
+        flushing_time = amount_flushed / self.storage.write_bw
+        self.memory.flush(amount_flushed)
         return flushing_time
 
     def period_evict(self):
         return 0
 
     def release(self, file):
-        self.memory.free += file.cache
+        self.memory.free += file.size
 
     def compute(self, time, cpu_time=0):
+        self.period_flush(cpu_time)
         return time + cpu_time
 
     def get_dirty_threshold(self):
