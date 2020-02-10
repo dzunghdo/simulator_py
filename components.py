@@ -8,7 +8,6 @@ class File:
 
     def __init__(self, name, size=0, disk=0, cache=0, dirty=0, active=0, inactive=0):
         """
-
         :param name: filename
         :param size: size in MB
         :param disk: data on disk in MB
@@ -96,6 +95,9 @@ class Memory:
         evicted = 0
         for block in self.inactive:
 
+            if block.dirty:
+                continue
+
             if evicted >= amount:
                 break
             elif evicted < amount < evicted + block.size:
@@ -126,7 +128,7 @@ class Memory:
 
         block = Block(filename=filename, size=amount, dirty=False, accessed_time=time.time())
         self.inactive.append(block)
-        self.sort_lru_list()
+        self.update_lru_lists()
 
     def cache_read(self, filename):
         """
@@ -135,22 +137,31 @@ class Memory:
         :return:
         """
 
-        read_size = 0
+        dirty = 0
+        not_dirty = 0
         for block in self.inactive[:]:
             if block.filename == filename:
-                read_size += block.size
+                if block.dirty:
+                    dirty += block.size
+                else:
+                    not_dirty += block.size
                 self.inactive.remove(block)
 
         for block in self.active[:]:
             if block.filename == filename:
-                read_size += block.size
+                if block.dirty:
+                    dirty += block.size
+                else:
+                    not_dirty += block.size
                 self.active.remove(block)
 
         # Update all accessed data as active
-        active_block = Block(filename, read_size, dirty=False, accessed_time=time.time())
-        self.active.append(active_block)
+        dirty_block = Block(filename, dirty, dirty=True, accessed_time=time.time())
+        not_dirty_block = Block(filename, not_dirty, dirty=False, accessed_time=time.time())
+        self.active.append(dirty_block)
+        self.active.append(not_dirty_block)
 
-        self.sort_lru_list()
+        self.update_lru_lists()
 
     def write(self, filename, amount, max_cache, new_dirty):
         """
@@ -171,17 +182,32 @@ class Memory:
 
         self.dirty += new_dirty
 
-        block = Block(filename, amount, dirty=False, accessed_time=time.time())
-        self.inactive.append(block)
-        self.sort_lru_list()
+        self.inactive.append(Block(filename, new_dirty, dirty=True, accessed_time=time.time()))
+        self.inactive.append(Block(filename, amount - new_dirty, dirty=False, accessed_time=time.time()))
+        self.update_lru_lists()
 
-    def sort_lru_list(self):
+    def update_lru_lists(self):
         self.inactive = sorted(self.inactive, key=lambda block: block.accessed_time)
         self.active = sorted(self.active, key=lambda block: block.accessed_time)
 
-    def balance_lru_lists(self):
+        inactive_size = sum([block.size for block in self.inactive])
+        active_size = sum([block.size for block in self.active])
+
         # move old data from active to inactive list
-        pass
+        if active_size >= 2 * inactive_size:
+            avg = (active_size + inactive_size) / 2
+            for block in self.active[:]:
+                if active_size - block.size < avg:
+                    block.size -= active_size - avg
+                    new_block = Block(block.filename, active_size - avg, dirty=block.dirty,
+                                      accessed_time=block.accessed_time)
+                    self.inactive.append(new_block)
+                    break
+                else:
+                    self.inactive.append(block)
+                    self.active.remove(block)
+
+        self.inactive = sorted(self.inactive, key=lambda block: block.accessed_time)
 
     def print(self):
         print("Memory status:")
