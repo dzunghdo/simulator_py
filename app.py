@@ -17,18 +17,22 @@ file4 = File("file4", 6010, 6010)
 start_time = 0
 
 task1_read_end = kernel.read(file1, start_time)
-task1_write_end = kernel.write(file2, task1_read_end)
+task1_compute_end = kernel.compute(task1_read_end, 10)
+task1_write_end = kernel.write(file2, task1_compute_end)
 kernel.release(file2)
 
 task2_read_end = kernel.read(file2, task1_write_end)
-task2_write_end = kernel.write(file3, task2_read_end)
+task2_compute_end = kernel.compute(task2_read_end, 10)
+task2_write_end = kernel.write(file3, task2_compute_end)
 kernel.release(file3)
 
 task3_read_end = kernel.read(file3, task2_write_end)
-task3_write_end = kernel.write(file4, task3_read_end)
+task3_compute_end = kernel.compute(task3_read_end, 10)
+task3_write_end = kernel.write(file4, task3_compute_end)
 kernel.release(file4)
 
-task_time = [start_time, task1_read_end, task1_write_end, task2_read_end, task2_write_end, task3_read_end,
-             task3_write_end]
+task_time = [start_time, task1_read_end, task1_compute_end, task1_write_end,
+             task2_read_end, task2_compute_end, task2_write_end,
+             task3_read_end, task3_compute_end, task3_write_end]
 
 plot.plot_mem_log(memory.get_log(), task_time)
