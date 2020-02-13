@@ -85,12 +85,13 @@ class Memory:
     def get_available_memory(self):
         return self.free + self.cache - self.dirty
 
+    def get_evictable_memory(self):
+        return sum([block.size for block in self.inactive if not block.dirty])
+
     def get_log(self):
         return self.log
 
     def evict(self, amount):
-        # evictable = self.cache - self.dirty
-        # evicted = min(evictable, amount)
 
         evicted = 0
         for block in self.inactive:
@@ -180,10 +181,13 @@ class Memory:
             self.cache += amount
             self.free -= amount
 
-        self.dirty += new_dirty
+        if new_dirty > 0:
+            self.dirty += new_dirty
+            self.inactive.append(Block(filename, new_dirty, dirty=True, accessed_time=time.time()))
 
-        self.inactive.append(Block(filename, new_dirty, dirty=True, accessed_time=time.time()))
-        self.inactive.append(Block(filename, amount - new_dirty, dirty=False, accessed_time=time.time()))
+        if amount - new_dirty > 0:
+            self.inactive.append(Block(filename, amount - new_dirty, dirty=False, accessed_time=time.time()))
+
         self.update_lru_lists()
 
     def update_lru_lists(self):
@@ -224,20 +228,42 @@ class Memory:
         self.log["cache"].append(self.cache)
         self.log["dirty"].append(self.dirty)
 
-    def print_cached_files(self):
+    def print_cached_dirty(self):
         print("\nInactive:")
         total_inactive = 0
         for block in self.inactive:
             total_inactive += block.size
-            print("%s, %d MB, %f" % (block.filename, block.size, block.accessed_time))
+            print("%s, %d MB, dirty=%r, %f" % (block.filename, block.size, block.dirty, block.accessed_time))
         print("Total: %d MB" % total_inactive)
 
         total_active = 0
         print("\nActive:")
         for block in self.active:
-            total_inactive += block.size
-            print("%s, %d MB, %f" % (block.filename, block.size, block.accessed_time))
+            total_active += block.size
+            print("%s, %d MB, dirty=%r, %f" % (block.filename, block.size, block.dirty, block.accessed_time))
         print("Total: %d MB\n" % total_active)
+
+    def print_file_total_cached(self):
+        inactive = {}
+        active = {}
+
+        for block in self.inactive:
+            if block.filename in inactive.keys():
+                inactive[block.filename] += block.size
+            else:
+                inactive[block.filename] = block.size
+
+        for block in self.active:
+            if block.filename in active.keys():
+                active[block.filename] += block.size
+            else:
+                active[block.filename] = block.size
+
+        print("\nInactive:")
+        print(inactive)
+        print("Active:")
+        print(active)
+        print("\n")
 
 
 class Storage:
@@ -325,45 +351,53 @@ class Kernel:
         self.memory.add_log(run_time)
 
         max_cache = self.memory.size - file.size
-        cached_amt = self.memory.get_data_in_cache(file.name)
 
-        # check if more cache is required for writing file
-        cache_required = max(0, file.size - cached_amt - self.memory.get_available_memory())
-        if cache_required > 0:
-            self.memory.evict(cache_required)
+        # # check if more cache is required for writing file
+        # cache_required = max(0, file.size - cached_amt - self.memory.get_available_memory())
+        # if cache_required > 0:
+        #     self.memory.evict(cache_required)
 
         # ============= FREE WRITE ===============
-
+        # Write data before dirty_data is reached
         dirty_thres = self.dirty_ratio * self.memory.get_available_memory()
-        free_amt = min(self.memory.free, file.size, dirty_thres - self.memory.dirty)
+        dirty_amt = min(file.size, dirty_thres - self.memory.dirty)
 
-        if free_amt > 0:
+        if dirty_amt > 0:
             # write to cache with memory bw
-            cached_amt += free_amt
-            self.memory.write(file.name, amount=free_amt, max_cache=max_cache, new_dirty=free_amt)
-            free_write_time = free_amt / self.memory.write_bw
+            required = max((dirty_amt - self.memory.free, 0))
+            self.evict(required)
+            self.memory.write(file.name, amount=dirty_amt, max_cache=max_cache, new_dirty=dirty_amt)
+            free_write_time = dirty_amt / self.memory.write_bw
             run_time += free_write_time
 
             self.memory.add_log(run_time)
-            print("\tFreely write %d MB in %.2f sec" % (free_amt, free_write_time))
+            print("\tFreely write %d MB in %.2f sec" % (dirty_amt, free_write_time))
 
-        if cached_amt == file.size:
+        if dirty_amt == file.size:
             return run_time
 
         # ============= WRITE WITH DISK BW =============
+        # Write dirty data after dirty_ratio is reached
+        throttled_amt = file.size - dirty_amt
 
-        # Write dirty data before threshold is reached
-        dirty_amt = max(0, self.get_dirty_threshold() - self.memory.dirty)
-        throttled_amt = file.size - free_amt
+        cache_required = max(0, throttled_amt - self.memory.free)
+        evict_amt = min(cache_required, self.memory.get_evictable_memory())
 
-        self.memory.write(file.name, amount=throttled_amt, max_cache=max_cache, new_dirty=dirty_amt)
+        to_cache_amt = min(evict_amt + self.memory.free, throttled_amt)
+        to_disk_amt = throttled_amt - to_cache_amt
 
-        throttled_write_time = throttled_amt / self.storage.write_bw
-        run_time += throttled_write_time
+        if cache_required > 0:
+            self.memory.evict(evict_amt)
+
+        cache_write_time = to_cache_amt / self.storage.write_bw
+        disk_write_time = to_disk_amt / self.storage.write_bw
+        run_time += cache_write_time + disk_write_time
+        self.memory.write(file.name, amount=to_cache_amt, max_cache=max_cache, new_dirty=0)
 
         self.memory.add_log(run_time)
 
-        print("\tThrottled write %d MB(%d MB dirty) in %.2f sec" % (throttled_amt, dirty_amt, throttled_write_time))
+        print("\tThrottled write %d to cache MB(%d MB dirty) in %.2f sec" % (to_cache_amt, dirty_amt, cache_write_time))
+        print("\tThrottled write %d to disk in %.2f sec" % (to_disk_amt, disk_write_time))
         print("%.2f File %s is written " % (run_time, file.name))
 
         return run_time
@@ -377,10 +411,30 @@ class Kernel:
         return 0
 
     def period_flush(self, duration):
-        amount_flushed = min(self.memory.dirty, self.storage.write_bw * duration)
-        flushing_time = amount_flushed / self.storage.write_bw
-        self.memory.flush(amount_flushed)
-        return flushing_time
+
+        self.memory.inactive.reverse()
+
+        max_flushed = min(self.memory.dirty, self.storage.write_bw * duration)
+
+        flushed = 0
+
+        for block in self.memory.inactive:
+            if block.dirty:
+                if flushed + block.size <= max_flushed:
+                    block.dirty = False
+                    self.memory.flush(block.size)
+                elif flushed < max_flushed < flushed + block.size:
+                    blk_flushed = max_flushed - flushed
+                    block.size -= blk_flushed
+                    self.memory.flush(blk_flushed)
+                    new_block = Block(block.filename, blk_flushed, dirty=False, accessed_time=block.accessed_time)
+                    self.memory.inactive.append(new_block)
+                else:
+                    break
+
+        self.memory.inactive = sorted(self.memory.inactive, key=lambda item: item.accessed_time)
+
+        return duration
 
     def period_evict(self):
         return 0
