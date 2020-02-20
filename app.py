@@ -29,7 +29,8 @@ kernel.release(file3)
 task3_read_end = kernel.read(file3, task2_write_end)
 task3_compute_end = kernel.compute(task3_read_end, 10)
 task3_write_end = kernel.write(file4, task3_compute_end)
-kernel.memory.print_file_total_cached()
+# kernel.memory.print_cached_dirty()
+# kernel.memory.print_file_total_cached()
 kernel.release(file4)
 
 task_time = [start_time, task1_read_end, task1_compute_end, task1_write_end,

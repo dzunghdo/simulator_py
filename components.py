@@ -94,7 +94,7 @@ class Memory:
     def evict(self, amount):
 
         evicted = 0
-        for block in self.inactive:
+        for block in self.inactive[:]:
 
             if block.dirty:
                 continue
@@ -112,9 +112,6 @@ class Memory:
 
         self.free += evicted
         self.cache -= evicted
-
-    def flush(self, amount):
-        self.dirty -= amount
 
     def read_from_disk(self, amount, filename=None):
         """
@@ -403,7 +400,7 @@ class Kernel:
         return run_time
 
     def flush(self, amount):
-        self.memory.flush(amount)
+        self.memory.dirty -= amount
         return amount / self.storage.write_bw
 
     def evict(self, amount):
@@ -422,17 +419,32 @@ class Kernel:
             if block.dirty:
                 if flushed + block.size <= max_flushed:
                     block.dirty = False
-                    self.memory.flush(block.size)
+                    self.memory.dirty -= block.size
                 elif flushed < max_flushed < flushed + block.size:
                     blk_flushed = max_flushed - flushed
                     block.size -= blk_flushed
-                    self.memory.flush(blk_flushed)
+                    self.memory.dirty -= blk_flushed
                     new_block = Block(block.filename, blk_flushed, dirty=False, accessed_time=block.accessed_time)
                     self.memory.inactive.append(new_block)
                 else:
                     break
 
-        self.memory.inactive = sorted(self.memory.inactive, key=lambda item: item.accessed_time)
+        if flushed < max_flushed:
+            for block in self.memory.active:
+                if block.dirty:
+                    if flushed + block.size <= max_flushed:
+                        block.dirty = False
+                        self.memory.dirty -= block.size
+                    elif flushed < max_flushed < flushed + block.size:
+                        blk_flushed = max_flushed - flushed
+                        block.size -= blk_flushed
+                        self.memory.dirty -= blk_flushed
+                        new_block = Block(block.filename, blk_flushed, dirty=False, accessed_time=block.accessed_time)
+                        self.memory.active.append(new_block)
+                    else:
+                        break
+
+        self.memory.update_lru_lists()
 
         return duration
 
