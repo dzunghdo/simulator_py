@@ -313,30 +313,31 @@ class Kernel:
         # Read from disk: if a part of file is read from disk, memory read is neglected.
         if from_disk > 0:
 
+            # time for flushing is taken into account
+            flushing_time = self.flush(self.memory.dirty)
+            run_time += flushing_time
+            self.memory.add_log(run_time)
+
             # read to cache
             self.memory.read_from_disk(from_disk, file.name)
+            # mem used by application
+            self.memory.free -= from_disk
 
             # time to read from disk
             disk_read_time = from_disk / self.storage.read_bw
             run_time += disk_read_time
 
-            ## time for periodical flushing is taken into account
-            # flushing_time = self.period_flush(disk_read_time)
-            # run_time += flushing_time
-
             print("\tRead %d MB from disk in %.2f sec" % (from_disk, disk_read_time))
+            self.memory.add_log(run_time)
 
-        else:
-            mem_read_time = cached_amt / self.memory.read_bw
-            run_time += mem_read_time
-
-            # Periodical flushing doesn't take time during reading from cache
-            self.period_flush(mem_read_time)
-
-            print("\tRead %d MB from cache in %.2f sec" % (cached_amt, mem_read_time))
+        mem_read_time = cached_amt / self.memory.read_bw
+        run_time += mem_read_time
+        # Periodical flushing doesn't take time during reading from cache
+        self.period_flush(mem_read_time)
+        print("\tRead %d MB from cache in %.2f sec" % (cached_amt, mem_read_time))
 
         # mem used by application
-        self.memory.free -= file.size
+        self.memory.free -= cached_amt
 
         print("%.2f File %s is read" % (run_time, file.name))
         self.memory.add_log(run_time)
@@ -400,28 +401,16 @@ class Kernel:
         return run_time
 
     def flush(self, amount):
-        self.memory.dirty -= amount
-        return amount / self.storage.write_bw
-
-    def evict(self, amount):
-        self.memory.evict(amount)
-        return 0
-
-    def period_flush(self, duration):
-
-        self.memory.inactive.reverse()
-
-        max_flushed = min(self.memory.dirty, self.storage.write_bw * duration)
-
         flushed = 0
 
+        self.memory.inactive.reverse()
         for block in self.memory.inactive:
             if block.dirty:
-                if flushed + block.size <= max_flushed:
+                if flushed + block.size <= amount:
                     block.dirty = False
                     self.memory.dirty -= block.size
-                elif flushed < max_flushed < flushed + block.size:
-                    blk_flushed = max_flushed - flushed
+                elif flushed < amount < flushed + block.size:
+                    blk_flushed = amount - flushed
                     block.size -= blk_flushed
                     self.memory.dirty -= blk_flushed
                     new_block = Block(block.filename, blk_flushed, dirty=False, accessed_time=block.accessed_time)
@@ -429,14 +418,15 @@ class Kernel:
                 else:
                     break
 
-        if flushed < max_flushed:
+        if flushed < amount:
+            self.memory.active.reverse()
             for block in self.memory.active:
                 if block.dirty:
-                    if flushed + block.size <= max_flushed:
+                    if flushed + block.size <= amount:
                         block.dirty = False
                         self.memory.dirty -= block.size
-                    elif flushed < max_flushed < flushed + block.size:
-                        blk_flushed = max_flushed - flushed
+                    elif flushed < amount < flushed + block.size:
+                        blk_flushed = amount - flushed
                         block.size -= blk_flushed
                         self.memory.dirty -= blk_flushed
                         new_block = Block(block.filename, blk_flushed, dirty=False, accessed_time=block.accessed_time)
@@ -446,7 +436,18 @@ class Kernel:
 
         self.memory.update_lru_lists()
 
+        return amount / self.storage.write_bw
+
+    def period_flush(self, duration):
+
+        max_flushed = min(self.memory.dirty, self.storage.write_bw * duration)
+        self.flush(max_flushed)
+
         return duration
+
+    def evict(self, amount):
+        self.memory.evict(amount)
+        return 0
 
     def period_evict(self):
         return 0
