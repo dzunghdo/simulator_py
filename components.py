@@ -113,6 +113,8 @@ class Memory:
         self.free += evicted
         self.cache -= evicted
 
+        return evicted
+
     def read_from_disk(self, amount, filename=None):
         """
         Read data not cached from disk. Add new read block to inactive list.
@@ -293,16 +295,16 @@ class Kernel:
         # ============= FLUSHING - EVICTION ==========
         # Memory required to accommodate file in cache and application used memory
         mem_required = max(0, 2 * file.size - cached_amt - self.memory.get_available_memory())
-        # Flush if not enough available memory
+        mem_available = max(0, 2 * file.size - cached_amt - self.memory.dirty)
+
+        # Flush if there is not enough available memory even after eviction
         # This takes time to write dirty data to memory
-        if mem_required > 0:
+        if mem_required > mem_available:
             run_time += self.flush(mem_required)
 
         # if free memory is not enough after flushing, then evict old pages
-        # This doesn't take time
         mem_required = max(0, 2 * file.size - cached_amt - self.memory.free)
         if mem_required > 0:
-            # run_time += self.evict(mem_required)
             self.evict(mem_required)
 
         # =========== START READING ===========
@@ -312,7 +314,6 @@ class Kernel:
 
         # Read from disk: if a part of file is read from disk, memory read is neglected.
         if from_disk > 0:
-
             # time for flushing is taken into account
             flushing_time = self.flush(self.memory.dirty)
             run_time += flushing_time
@@ -355,47 +356,59 @@ class Kernel:
         # if cache_required > 0:
         #     self.memory.evict(cache_required)
 
-        # ============= FREE WRITE ===============
+        # ============= WRITE WITH MEMORY BW ===============
         # Write data before dirty_data is reached
         dirty_thres = self.dirty_ratio * self.memory.get_available_memory()
-        dirty_amt = min(file.size, dirty_thres - self.memory.dirty)
+        dirty_written_amt = min(file.size, dirty_thres - self.memory.dirty)
 
-        if dirty_amt > 0:
+        if dirty_written_amt > 0:
+
             # write to cache with memory bw
-            required = max((dirty_amt - self.memory.free, 0))
-            self.evict(required)
-            self.memory.write(file.name, amount=dirty_amt, max_cache=max_cache, new_dirty=dirty_amt)
-            free_write_time = dirty_amt / self.memory.write_bw
-            run_time += free_write_time
+            required = max((dirty_written_amt - self.memory.free, 0))
+            if required > 0:
+                self.evict(required)
+
+            dirty_write_time = dirty_written_amt / self.memory.write_bw
+
+            # The amount of dirty data concurrently written back to disk
+            # written_back_amt = min(dirty_write_time * self.storage.write_bw, file.size - dirty_written_amt)
+
+            # the amount written is sum of the dirty data plus dirty data written back
+            self.memory.write(file.name, amount=dirty_written_amt, max_cache=max_cache,
+                              new_dirty=dirty_written_amt)
+            run_time += dirty_write_time
 
             self.memory.add_log(run_time)
-            print("\tFreely write %d MB in %.2f sec" % (dirty_amt, free_write_time))
+            print("\tWrite to cache %d MB in %.2f sec" % (dirty_written_amt, dirty_write_time))
 
-        if dirty_amt == file.size:
+        if dirty_written_amt == file.size:
             return run_time
 
         # ============= WRITE WITH DISK BW =============
         # Write dirty data after dirty_ratio is reached
-        throttled_amt = file.size - dirty_amt
+        throttled_amt = file.size - dirty_written_amt
 
+        # Amount of free memory required to accommodate written file
         cache_required = max(0, throttled_amt - self.memory.free)
+        # amount of cache can be evicted to accommodate written file
         evict_amt = min(cache_required, self.memory.get_evictable_memory())
-
-        to_cache_amt = min(evict_amt + self.memory.free, throttled_amt)
-        to_disk_amt = throttled_amt - to_cache_amt
-
-        if cache_required > 0:
+        if evict_amt > 0:
             self.memory.evict(evict_amt)
 
-        cache_write_time = to_cache_amt / self.storage.write_bw
-        disk_write_time = to_disk_amt / self.storage.write_bw
-        run_time += cache_write_time + disk_write_time
+        # amount of data written to cache with disk bw
+        to_cache_amt = min(self.memory.free, throttled_amt)
+        # to_disk_amt = throttled_amt - to_cache_amt
+
+        throttled_write_time = throttled_amt / self.storage.write_bw
+        # disk_write_time = to_disk_amt / self.storage.write_bw
+
+        run_time += throttled_write_time
         self.memory.write(file.name, amount=to_cache_amt, max_cache=max_cache, new_dirty=0)
 
         self.memory.add_log(run_time)
 
-        print("\tThrottled write %d to cache MB(%d MB dirty) in %.2f sec" % (to_cache_amt, dirty_amt, cache_write_time))
-        print("\tThrottled write %d to disk in %.2f sec" % (to_disk_amt, disk_write_time))
+        print("\tThrottled write %d MB in %.2f sec" % (throttled_amt, throttled_write_time))
+        # print("\tThrottled write %d to disk in %.2f sec" % (to_disk_amt, disk_write_time))
         print("%.2f File %s is written " % (run_time, file.name))
 
         return run_time
@@ -409,8 +422,10 @@ class Kernel:
                 if flushed + block.size <= amount:
                     block.dirty = False
                     self.memory.dirty -= block.size
+                    flushed += block.size
                 elif flushed < amount < flushed + block.size:
                     blk_flushed = amount - flushed
+                    flushed += blk_flushed
                     block.size -= blk_flushed
                     self.memory.dirty -= blk_flushed
                     new_block = Block(block.filename, blk_flushed, dirty=False, accessed_time=block.accessed_time)
