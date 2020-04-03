@@ -5,8 +5,8 @@ from components import File
 from components import Storage
 from components import Memory
 
-memory = Memory(14.5 * pow(2, 10), 14800, read_bw=2680, write_bw=1100)
-storage = Storage(200 * pow(2, 10), read_bw=110, write_bw=110)
+memory = Memory(15.6 * 1000, 15.6 * 1000, read_bw=2680, write_bw=800)
+storage = Storage(200 * 1000 ** 2, read_bw=120, write_bw=150)
 kernel = Kernel(memory, storage)
 
 input_size = 6000
@@ -29,7 +29,7 @@ task2_compute_end = kernel.compute(task2_read_end, compute_time)
 task2_write_end = kernel.write(file3, task2_compute_end)
 kernel.release(file3)
 # kernel.memory.print_cached_dirty()
-kernel.memory.print_file_total_cached()
+# kernel.memory.print_file_total_cached()
 
 task3_read_end = kernel.read(file3, task2_write_end)
 task3_compute_end = kernel.compute(task3_read_end, compute_time)

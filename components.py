@@ -358,35 +358,42 @@ class Kernel:
 
         # ============= WRITE WITH MEMORY BW ===============
         # Write data before dirty_data is reached
-        dirty_thres = self.dirty_ratio * self.memory.get_available_memory()
-        dirty_written_amt = min(file.size, dirty_thres - self.memory.dirty)
+        left_dirty_amt = self.dirty_ratio * self.memory.get_available_memory() - self.memory.dirty
 
-        if dirty_written_amt > 0:
+        free_written_amt = 0
+        if left_dirty_amt > 0:
 
-            # write to cache with memory bw
-            required = max((dirty_written_amt - self.memory.free, 0))
+            # Amount of data that makes dirty data reach dirty_ratio
+            # Before this point, data is written to cache with memory bw
+            # and dirty data is flushed to disk concurrently
+            max_free_amt = left_dirty_amt * self.memory.write_bw / (self.memory.write_bw - self.storage.write_bw)
+
+            # amount of data written to cache
+            free_written_amt = min(file.size, max_free_amt)
+            required = max(free_written_amt - self.memory.free, 0)
             if required > 0:
                 self.evict(required)
 
-            dirty_write_time = dirty_written_amt / self.memory.write_bw
-
-            # The amount of dirty data concurrently written back to disk
-            # written_back_amt = min(dirty_write_time * self.storage.write_bw, file.size - dirty_written_amt)
+            free_write_time = free_written_amt / self.memory.write_bw
+            # amount of data flushed during cache write time
+            flushed_amt = free_write_time * self.storage.write_bw
+            # amount of left dirty data
+            dirty_amt = free_written_amt - flushed_amt
 
             # the amount written is sum of the dirty data plus dirty data written back
-            self.memory.write(file.name, amount=dirty_written_amt, max_cache=max_cache,
-                              new_dirty=dirty_written_amt)
-            run_time += dirty_write_time
+            self.memory.write(file.name, amount=free_written_amt, max_cache=max_cache,
+                              new_dirty=dirty_amt)
+            run_time += free_write_time
 
             self.memory.add_log(run_time)
-            print("\tWrite to cache %d MB in %.2f sec" % (dirty_written_amt, dirty_write_time))
+            print("\tWrite to cache %d MB in %.2f sec" % (free_written_amt, free_write_time))
 
-        if dirty_written_amt == file.size:
+        if left_dirty_amt == file.size:
             return run_time
 
         # ============= WRITE WITH DISK BW =============
         # Write dirty data after dirty_ratio is reached
-        throttled_amt = file.size - dirty_written_amt
+        throttled_amt = file.size - free_written_amt
 
         # Amount of free memory required to accommodate written file
         cache_required = max(0, throttled_amt - self.memory.free)
