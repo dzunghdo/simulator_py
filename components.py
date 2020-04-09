@@ -287,7 +287,6 @@ class Kernel:
 
     def read(self, file, run_time=0):
         print("%.2f Start reading %s" % (run_time, file.name))
-        self.memory.add_log(run_time)
 
         cached_amt = self.memory.get_data_in_cache(file.name)
         from_disk = file.size - cached_amt
@@ -301,6 +300,7 @@ class Kernel:
         # This takes time to write dirty data to memory
         if mem_required > mem_available:
             run_time += self.flush(mem_required)
+            self.memory.add_log(run_time)
 
         # if free memory is not enough after flushing, then evict old pages
         mem_required = max(0, 2 * file.size - cached_amt - self.memory.free)
@@ -315,9 +315,10 @@ class Kernel:
         # Read from disk: if a part of file is read from disk, memory read is neglected.
         if from_disk > 0:
             # time for flushing is taken into account
-            flushing_time = self.flush(self.memory.dirty)
-            run_time += flushing_time
-            self.memory.add_log(run_time)
+            if self.memory.dirty > 0:
+                flushing_time = self.flush(self.memory.dirty)
+                run_time += flushing_time
+                self.memory.add_log(run_time)
 
             # read to cache
             self.memory.read_from_disk(from_disk, file.name)
@@ -331,17 +332,19 @@ class Kernel:
             print("\tRead %d MB from disk in %.2f sec" % (from_disk, disk_read_time))
             self.memory.add_log(run_time)
 
-        mem_read_time = cached_amt / self.memory.read_bw
-        run_time += mem_read_time
-        # Periodical flushing doesn't take time during reading from cache
-        self.period_flush(mem_read_time)
-        print("\tRead %d MB from cache in %.2f sec" % (cached_amt, mem_read_time))
+        if cached_amt > 0:
 
-        # mem used by application
-        self.memory.free -= cached_amt
+            mem_read_time = cached_amt / self.memory.read_bw
+            run_time += mem_read_time
+            # Periodical flushing doesn't take time during reading from cache
+            self.period_flush(mem_read_time)
+            print("\tRead %d MB from cache in %.2f sec" % (cached_amt, mem_read_time))
 
-        print("%.2f File %s is read" % (run_time, file.name))
-        self.memory.add_log(run_time)
+            # mem used by application
+            self.memory.free -= cached_amt
+
+            print("%.2f File %s is read" % (run_time, file.name))
+            self.memory.add_log(run_time)
 
         return run_time
 
