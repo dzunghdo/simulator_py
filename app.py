@@ -1,9 +1,11 @@
 # i/o simulator in python
 import plot
+import csv
 from components import Kernel
 from components import File
 from components import Storage
 from components import Memory
+
 
 memory = Memory(15.6 * 1000, 15.6 * 1000, read_bw=2680, write_bw=800)
 storage = Storage(200 * 1000 ** 2, read_bw=120, write_bw=150)
@@ -44,8 +46,33 @@ task_time = {
 
 }
 
+tasks = [("read", start_time, task1_read_end), ("write", task1_compute_end, task1_write_end),
+         ("read", task1_write_end, task2_read_end), ("write", task2_compute_end, task2_write_end),
+         ("read", task2_write_end, task3_read_end), ("write", task3_compute_end, task3_write_end)]
+
 plot.plot_mem_log(memory.get_log(), task_time, "input = %d MB \nmem_rb = %d MBps\nmem_wb = %d MBps \n"
                                                "disk_rb = %d MBps\ndisk_wb = %d MBps"
                   % (input_size, memory.read_bw, memory.write_bw,
                      storage.read_bw, storage.write_bw),
                   xmin=0, xmax=300, ymin=-1000, ymax=16000)
+
+
+def export_mem(mem_log, filename):
+    with open(filename, 'w', newline='') as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(["time", "total_mem", "dirty", "cache", "used_mem"])
+        for i in range(len(memory.get_log()["time"])):
+            writer.writerow([mem_log["time"][i], mem_log["total"][i], mem_log["dirty"][i],
+                             mem_log["cache"][i], mem_log["used"][i]])
+
+
+def export_time(task_list, filename):
+    with open(filename, 'w', newline='') as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(["type", "start", "end"])
+        for i in range(len(task_list)):
+            writer.writerow([task_list[i][0], task_list[i][1], task_list[i][2]])
+
+
+export_mem(memory.get_log(), "simulator.csv")
+export_time(tasks, "timestamps.csv")
