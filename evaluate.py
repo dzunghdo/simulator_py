@@ -139,8 +139,7 @@ def mem_metrics(real_time_logfile, sim_time_logfile, real_mem_logfile, sim_mem_l
     dirty_acc = [sim / real for real, sim in zip(real_dirty_amt, sim_dirty_amt)]
     cache_acc = [sim / real for real, sim in zip(real_cache_amt, sim_cache_amt)]
 
-    print(dirty_acc)
-    print(cache_acc)
+    return dirty_acc, cache_acc
 
 
 realtime_log = "log/6000_timestamps_pipeline.log"
@@ -148,5 +147,12 @@ simtime_log = "log/timestamps.csv"
 atop_file = "log/6000_pipeline_mem_c.log"
 sim_logfile = "log/simulator.csv"
 
-accuracy = time_metrics(realtime_log, simtime_log)
-print(mem_metrics(realtime_log, simtime_log, atop_file, sim_logfile))
+time_acc = time_metrics(realtime_log, simtime_log)
+dirty_acc, cache_acc = mem_metrics(realtime_log, simtime_log, atop_file, sim_logfile)
+
+print("Time accuracy:")
+print(time_acc)
+print("Dirty data accuracy:")
+print(dirty_acc)
+print("Cache accuracy:")
+print(cache_acc)
