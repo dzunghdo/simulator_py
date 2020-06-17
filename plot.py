@@ -10,8 +10,8 @@ def plot_mem_log(mem_log, time_stamps, text, xmin, xmax, ymin, ymax):
     cache = mem_log["cache"]
     dirty = mem_log["dirty"]
     available = list(np.array(free) + np.array(cache) - np.array(dirty))
-    dirty_ratio = list(np.array(available) * 0.2)
-    dirty_bg_ratio = list(np.array(dirty_ratio) / 2)
+    dirty_ratio = list(np.array(available) * 0.4)
+    dirty_bg_ratio = list(np.array(available) * 0.1)
 
     read_start = time_stamps["read_start"]
     read_end = time_stamps["read_end"]
@@ -40,10 +40,10 @@ def plot_mem_log(mem_log, time_stamps, text, xmin, xmax, ymin, ymax):
     plt.plot(time, available, color='b', linewidth=1, linestyle="-.", label="available mem")
     plt.plot(time, dirty_ratio, color='k', linewidth=1, linestyle="-.", label="dirty_ratio")
     plt.plot(time, dirty_bg_ratio, color='r', linewidth=1, linestyle="-.", label="dirty_bg_ratio")
-    plt.legend()
+    plt.legend(loc="upper right")
 
     plt.ylim(top=ymax, bottom=ymin)
     plt.xlim(right=xmax, left=xmin)
-    plt.text(1, 10000, text, fontsize=9)
+    plt.text(1, 200000, text, fontsize=9)
 
     plt.show()
