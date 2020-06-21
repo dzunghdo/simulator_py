@@ -69,7 +69,7 @@ plot.plot_mem_log(mm.get_log(), task_time, "input = %d MB \nmem_rb = %d MBps\nme
                                            "disk_rb = %d MBps\ndisk_wb = %d MBps"
                   % (input_size, mm.read_bw, mm.write_bw,
                      storage.read_bw, storage.write_bw),
-                  xmin=0, xmax=800, ymin=-10000, ymax=280000)
+                  xmin=0, xmax=1200, ymin=-10000, ymax=280000)
 
-export_mem(mm.get_log(), "py_log/ex1/new/100gb_sim_mem.csv")
-export_time(tasks, "py_log/ex1/new/100gb_sim_time.csv")
+# export_mem(mm.get_log(), "py_log/ex1/new/100gb_sim_mem.csv")
+# export_time(tasks, "py_log/ex1/new/100gb_sim_time.csv")

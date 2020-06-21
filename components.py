@@ -1,6 +1,3 @@
-import time
-
-
 class File:
     """
     File class.
@@ -27,15 +24,15 @@ class File:
 class Block:
     """Data block of a File"""
 
-    def __init__(self, filename, size=0, dirty=False, accessed_time=0.0):
+    def __init__(self, filename, size=0, dirty=False, last_access=0.0):
         self.filename = filename
         self.size = size
         self.dirty = dirty
-        self.accessed_time = accessed_time
+        self.last_access = last_access
 
 
 class MemoryManager:
-    def __init__(self, size=0, free=0, cache=0, dirty=0, read_bw=0, write_bw=0):
+    def __init__(self, size=0, free=0, cache=0, dirty=0, read_bw=0, write_bw=0, dirty_expire=30):
         """
         LRU list: list of tuples, the first value is filename, the 2nd value is timestamp, the 3rd value amount of data
 
@@ -54,6 +51,7 @@ class MemoryManager:
         self.active = []
         self.inactive = []
         self.write_bw = write_bw
+        self.dirty_expire = dirty_expire
         # self.active_list = []
         # self.inactive_list = []
         self.log = {
@@ -88,8 +86,72 @@ class MemoryManager:
     def get_evictable_memory(self):
         return sum([block.size for block in self.inactive if not block.dirty])
 
-    def get_log(self):
-        return self.log
+    def read_from_cache(self, filename, time):
+        """
+        Read data from cache. All data in cache is active
+        :param filename:
+        :param time:
+        :return:
+        """
+
+        dirty = 0
+        not_dirty = 0
+        for block in self.inactive[:]:
+            if block.filename == filename:
+                if block.dirty:
+                    dirty += block.size
+                else:
+                    not_dirty += block.size
+                self.inactive.remove(block)
+
+        for block in self.active[:]:
+            if block.filename == filename:
+                if block.dirty:
+                    dirty += block.size
+                else:
+                    not_dirty += block.size
+                self.active.remove(block)
+
+        # Update all accessed data as active
+        dirty_block = Block(filename, dirty, dirty=True, last_access=time)
+        not_dirty_block = Block(filename, not_dirty, dirty=False, last_access=time)
+        self.active.append(dirty_block)
+        self.active.append(not_dirty_block)
+
+        self.update_lru_lists()
+
+    def read_from_disk(self, amount, filename, time):
+        """
+        Read data not cached from disk. Add new read block to inactive list.
+        :param amount:
+        :param filename:
+        :param time:
+        :return:
+        """
+
+        self.cache += amount
+        self.free -= amount
+
+        block = Block(filename=filename, size=amount, dirty=False, last_access=time)
+        self.inactive.append(block)
+        self.update_lru_lists()
+
+    def pdflush(self, current_time):
+
+        flushed = 0
+        for block in self.inactive:
+            if block.dirty and current_time - block.last_access > self.dirty_expire:
+                block.dirty = False
+                flushed += block.size
+
+        for block in self.active:
+            if block.dirty and current_time - block.last_access > self.dirty_expire:
+                block.dirty = 0
+                flushed += block.size
+
+        self.dirty -= flushed
+
+        return flushed
 
     def evict(self, amount):
 
@@ -118,83 +180,36 @@ class MemoryManager:
 
         return evicted
 
-    def read_from_disk(self, amount, filename=None):
-        """
-        Read data not cached from disk. Add new read block to inactive list.
-        :param amount:
-        :param filename:
-        :return:
-        """
-
-        self.cache += amount
-        self.free -= amount
-
-        block = Block(filename=filename, size=amount, dirty=False, accessed_time=time.time())
-        self.inactive.append(block)
-        self.update_lru_lists()
-
-    def read_from_cache(self, filename):
-        """
-        Read data from cache. All data in cache is active
-        :param filename:
-        :return:
-        """
-
-        dirty = 0
-        not_dirty = 0
-        for block in self.inactive[:]:
-            if block.filename == filename:
-                if block.dirty:
-                    dirty += block.size
-                else:
-                    not_dirty += block.size
-                self.inactive.remove(block)
-
-        for block in self.active[:]:
-            if block.filename == filename:
-                if block.dirty:
-                    dirty += block.size
-                else:
-                    not_dirty += block.size
-                self.active.remove(block)
-
-        # Update all accessed data as active
-        dirty_block = Block(filename, dirty, dirty=True, accessed_time=time.time())
-        not_dirty_block = Block(filename, not_dirty, dirty=False, accessed_time=time.time())
-        self.active.append(dirty_block)
-        self.active.append(not_dirty_block)
-
-        self.update_lru_lists()
-
-    def write(self, filename, amount, max_cache, new_dirty):
+    def write(self, filename, amount, time):
         """
         Write a file to disk through cache. The written file is not in cache. Thus, all data is in inactive list
         :param filename: filename
         :param amount: total amount of data to write
         :param max_cache: maximum cache
         :param new_dirty: amount of dirty data
+        :param time:
         :return:
         """
 
-        if self.cache + amount > max_cache:
-            self.cache = max_cache
-            self.free = 0
-        else:
-            self.cache += amount
-            self.free -= amount
+        # self.inactive.append(Block(filename, amount, dirty=True, last_access=time))
 
-        if new_dirty > 0:
-            self.dirty += new_dirty
-            self.inactive.append(Block(filename, new_dirty, dirty=True, accessed_time=time.time()))
+        # if self.cache + amount > max_cache:
+        #     self.cache = max_cache
+        #     self.free = 0
+        # else:
+        #     self.cache += amount
+        #     self.free -= amount
 
-        if amount - new_dirty > 0:
-            self.inactive.append(Block(filename, amount - new_dirty, dirty=False, accessed_time=time.time()))
+        self.cache += amount
+        self.free -= amount
+        self.dirty += amount
+        self.inactive.append(Block(filename, amount, dirty=True, last_access=time))
 
         self.update_lru_lists()
 
     def update_lru_lists(self):
-        self.inactive = sorted(self.inactive, key=lambda block: block.accessed_time)
-        self.active = sorted(self.active, key=lambda block: block.accessed_time)
+        self.inactive = sorted(self.inactive, key=lambda block: block.last_access)
+        self.active = sorted(self.active, key=lambda block: block.last_access)
 
         inactive_size = sum([block.size for block in self.inactive])
         active_size = sum([block.size for block in self.active])
@@ -206,21 +221,14 @@ class MemoryManager:
                 if active_size - block.size < avg:
                     block.size -= active_size - avg
                     new_block = Block(block.filename, active_size - avg, dirty=block.dirty,
-                                      accessed_time=block.accessed_time)
+                                      last_access=block.last_access)
                     self.inactive.append(new_block)
                     break
                 else:
                     self.inactive.append(block)
                     self.active.remove(block)
 
-        self.inactive = sorted(self.inactive, key=lambda block: block.accessed_time)
-
-    def print(self):
-        print("Memory status:")
-        print("\t Total: %.2f" % self.size)
-        print("\t Free: %.2f" % self.free)
-        print("\t Cache: %.2f" % self.cache)
-        print("\t Dirty: %.2f" % self.dirty)
+        self.inactive = sorted(self.inactive, key=lambda block: block.last_access)
 
     def add_log(self, time):
         self.log["time"].append(time)
@@ -230,19 +238,29 @@ class MemoryManager:
         self.log["cache"].append(self.cache)
         self.log["dirty"].append(self.dirty)
 
+    def get_log(self):
+        return self.log
+
+    def print(self):
+        print("Memory status:")
+        print("\t Total: %.2f" % self.size)
+        print("\t Free: %.2f" % self.free)
+        print("\t Cache: %.2f" % self.cache)
+        print("\t Dirty: %.2f" % self.dirty)
+
     def print_cached_dirty(self):
         print("\nInactive:")
         total_inactive = 0
         for block in self.inactive:
             total_inactive += block.size
-            print("%s, %d MB, dirty=%r, %f" % (block.filename, block.size, block.dirty, block.accessed_time))
+            print("%s, %d MB, dirty=%r, %f" % (block.filename, block.size, block.dirty, block.last_access))
         print("Total: %d MB" % total_inactive)
 
         total_active = 0
         print("\nActive:")
         for block in self.active:
             total_active += block.size
-            print("%s, %d MB, dirty=%r, %f" % (block.filename, block.size, block.dirty, block.accessed_time))
+            print("%s, %d MB, dirty=%r, %f" % (block.filename, block.size, block.dirty, block.last_access))
         print("Total: %d MB\n" % total_active)
 
     def print_file_total_cached(self):
@@ -280,14 +298,22 @@ class Storage:
         self.read_bw = read_bw
         self.write_bw = write_bw
 
+    def read(self, amount):
+        return amount / self.read_bw
+
+    def write(self, amount):
+        return amount / self.write_bw
+
 
 class IOManager:
-    def __init__(self, memory_, storage_, dirty_ratio=0.2, dirty_bg_ratio=0.1, flushing_interval=10):
+    def __init__(self, memory_, storage_, dirty_ratio=0.2, dirty_bg_ratio=0.1,
+                 pdflush_interval=5, start_time=0):
         self.memory = memory_
         self.storage = storage_
         self.dirty_ratio = dirty_ratio
         self.dirty_bg_ratio = dirty_bg_ratio
-        self.flushing_interval = flushing_interval
+        self.last_pdflush = start_time
+        self.pdflush_interval = pdflush_interval
 
     def read(self, file, run_time=0):
         self.memory.add_log(run_time)
@@ -296,28 +322,32 @@ class IOManager:
         cached_amt = self.memory.get_data_in_cache(file.name)
         from_disk = file.size - cached_amt
 
-        # ============= FLUSHING - EVICTION ==========
+        # ============= FORCED FLUSHING - EVICTION ==========
         # Memory required to accommodate file on top of available memory
-        # this amount is to be flushed
-        to_be_flushed = 2 * file.size - cached_amt - self.memory.get_available_memory()
-        if to_be_flushed > 0:
-            run_time += self.flush(to_be_flushed)
-            self.memory.add_log(run_time)
-
+        # memory required for the file: 2 * file.size - cached_amt
+        # memory immediately available:  free + evictable
+        # calculate the amount to flush if needed
+        flush_time = self.flush(2 * file.size - cached_amt - self.memory.free - self.memory.get_evictable_memory())
+        run_time += flush_time
+        print("\tPre-flush in %.2f sec" % flush_time)
         # then evict old pages if needed
-        to_be_evicted = 2 * file.size - cached_amt - self.memory.free
-        if to_be_evicted > 0:
-            self.evict(to_be_evicted)
+        self.evict(2 * file.size - cached_amt - self.memory.free)
+
+        self.memory.add_log(run_time)
 
         # ===================== START READING =====================
         # if part of file is cached, access pages in cache again to update LRU lists
         if cached_amt > 0:
             # Re-access cache data
-            self.memory.read_from_cache(file.name)
+            self.memory.read_from_cache(file.name, run_time)
 
+            # bcz cache read and periodical flushing are concurrent, take the longer
             mem_read_time = cached_amt / self.memory.read_bw
-            run_time += mem_read_time
-            self.period_flush(mem_read_time)
+
+            # concurrent periodical flushing if there is still dirty old data after forced flushing
+            pdflush_time = self.period_flush(run_time)
+            print("\tpdflush in %.2f sec" % pdflush_time)
+            run_time += max(mem_read_time, pdflush_time)
 
             # application occupies memory to store read data
             self.memory.free -= cached_amt
@@ -326,17 +356,25 @@ class IOManager:
             print("\tRead %d MB from cache in %.2f sec" % (cached_amt, mem_read_time))
 
         if from_disk > 0:
+            # periodical flushing if there is still dirty old data
+            # This periodical flushing can be called after a forced flushing or a cache read
+            # disk read and periodical flushing are time shared
+            pdflush_time = self.period_flush(run_time)
+            run_time += pdflush_time
+            self.memory.add_log(run_time)
+            print("\tpdflush in %.2f sec" % pdflush_time)
+
             # add to inactive list
-            self.memory.read_from_disk(from_disk, file.name)
+            self.memory.read_from_disk(from_disk, file.name, run_time)
             # mem used by application
             self.memory.free -= from_disk
 
             # time to read from disk
-            disk_read_time = from_disk / self.storage.read_bw
+            disk_read_time = self.storage.read(from_disk)
             run_time += disk_read_time
+            self.memory.add_log(run_time)
 
             print("\tRead %d MB from disk in %.2f sec" % (from_disk, disk_read_time))
-            self.memory.add_log(run_time)
 
         return run_time
 
@@ -344,7 +382,9 @@ class IOManager:
         print("%.2f Start writing %s " % (run_time, file.name))
         self.memory.add_log(run_time)
 
-        max_cache = self.memory.size - file.size
+        # periodical flushing if needed
+        pdflush_time = self.period_flush(run_time)
+        self.memory.add_log(run_time)
 
         # ============= WRITE WITH MEMORY BW ===============
         # Write data before dirty_data is reached
@@ -352,55 +392,56 @@ class IOManager:
 
         mem_bw_amt = 0
         if remaining_dirty > 0:
-
             # Amount of data that makes dirty data reach dirty_ratio
             # Before this point, data is written to cache with memory bw
             # and dirty data is flushed to disk concurrently
             # max_free_amt = remaining_dirty * self.memory.write_bw / (self.memory.write_bw - self.storage.write_bw)
             max_free_amt = remaining_dirty
 
-            # amount of data written to cache
+            # data written to cache with memory bandwidth
             mem_bw_amt = min(file.size, max_free_amt)
             self.evict(mem_bw_amt - self.memory.free)
-
             mem_bw_write_time = mem_bw_amt / self.memory.write_bw
-            # amount of data flushed during cache write time
-            flushed_amt = mem_bw_write_time * self.storage.write_bw
-            # amount of left dirty data
-            dirty_amt = mem_bw_amt - flushed_amt
 
-            # the amount written is sum of the dirty data plus dirty data written back
-            self.memory.write(file.name, amount=mem_bw_amt, max_cache=max_cache,
-                              new_dirty=dirty_amt)
-            run_time += mem_bw_write_time
+            self.memory.write(file.name, amount=mem_bw_amt, time=run_time)
+            run_time += max(mem_bw_write_time, pdflush_time)
 
             self.memory.add_log(run_time)
             print("\tWrite to cache %d MB in %.2f sec" % (mem_bw_amt, mem_bw_write_time))
+        else:
+            run_time += pdflush_time
+            self.memory.add_log(run_time)
 
-        if mem_bw_amt >= file.size:
-            return run_time
+
+        disk_bw_amt = file.size - mem_bw_amt
 
         # ============= WRITE WITH DISK BW =============
         # Write dirty data after dirty_ratio is reached
-        disk_bw_amt = file.size - mem_bw_amt
+        if disk_bw_amt > 0:
+            # flush as much as we can because dirty data is full now
+            # because now flushing and cache write can be concurrent,
+            # it does not take time
+            self.flush(disk_bw_amt)
 
-        # evict to get more free memory for written file
-        self.memory.evict(disk_bw_amt - self.memory.free)
+            # evict as much as we can to get more free memory for written file
+            self.memory.evict(disk_bw_amt - self.memory.free)
 
-        # amount of data written to cache with disk bw
-        to_cache_amt = min(self.memory.free, disk_bw_amt)
-        # to_disk_amt = throttled_amt - to_cache_amt
+            # amount of data written and remained in cache after all remaining data is written
+            # In case free memory is less than remaining amount, data is written, flushed and evicted right away
+            # to accommodate unwritten data
+            to_cache_amt = min(self.memory.free, disk_bw_amt)
+            # to_disk_amt = throttled_amt - to_cache_amt
 
-        disk_bw_write_time = disk_bw_amt / self.storage.write_bw
-        # disk_write_time = to_disk_amt / self.storage.write_bw
+            disk_bw_write_time = self.storage.write(disk_bw_amt)
+            # disk_write_time = to_disk_amt / self.storage.write_bw
 
-        run_time += disk_bw_write_time
-        self.memory.write(file.name, amount=to_cache_amt, max_cache=max_cache, new_dirty=0)
+            run_time += disk_bw_write_time
+            self.memory.write(file.name, amount=to_cache_amt, time=run_time)
 
-        self.memory.add_log(run_time)
+            self.memory.add_log(run_time)
 
-        print("\tWrote with disk bw %d MB in %.2f sec" % (disk_bw_amt, disk_bw_write_time))
-        # print("\tThrottled write %d to disk in %.2f sec" % (to_disk_amt, disk_write_time))
+            print("\tWrote with disk bw %d MB in %.2f sec" % (disk_bw_amt, disk_bw_write_time))
+
         print("%.2f File %s is written " % (run_time, file.name))
 
         return run_time
@@ -423,7 +464,7 @@ class IOManager:
                     flushed += blk_flushed
                     block.size -= blk_flushed
                     self.memory.dirty -= blk_flushed
-                    new_block = Block(block.filename, blk_flushed, dirty=False, accessed_time=block.accessed_time)
+                    new_block = Block(block.filename, blk_flushed, dirty=False, last_access=block.last_access)
                     self.memory.inactive.append(new_block)
                 else:
                     break
@@ -439,7 +480,7 @@ class IOManager:
                         blk_flushed = amount - flushed
                         block.size -= blk_flushed
                         self.memory.dirty -= blk_flushed
-                        new_block = Block(block.filename, blk_flushed, dirty=False, accessed_time=block.accessed_time)
+                        new_block = Block(block.filename, blk_flushed, dirty=False, last_access=block.last_access)
                         self.memory.active.append(new_block)
                     else:
                         break
@@ -448,26 +489,30 @@ class IOManager:
 
         return amount / self.storage.write_bw
 
-    def period_flush(self, duration):
+    def period_flush(self, current_time):
+        """
+        Periodical flushing
+        :param current_time: current simulated time
+        :return: flushing time
+        """
+        flushed_amt = 0
+        if current_time - self.last_pdflush > self.pdflush_interval:
+            # update last flushing time
+            self.last_pdflush += int((current_time - self.last_pdflush) / self.pdflush_interval) * self.pdflush_interval
+            flushed_amt = self.memory.pdflush(self.last_pdflush)
 
-        max_flushed = min(self.memory.dirty, self.storage.write_bw * duration)
-        self.flush(max_flushed)
-
-        return duration
+        return self.storage.write(flushed_amt)
 
     def evict(self, amount):
         if amount > 0:
-            self.memory.evict(amount)
-        return 0
-
-    def period_evict(self):
+            return self.memory.evict(amount)
         return 0
 
     def release(self, file):
         self.memory.free += file.size
 
     def compute(self, start_time, cpu_time=0):
-        self.period_flush(cpu_time)
+        self.period_flush(start_time + cpu_time)
         return start_time + cpu_time
 
     def get_dirty_threshold(self):
