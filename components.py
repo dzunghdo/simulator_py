@@ -207,6 +207,51 @@ class MemoryManager:
 
         self.update_lru_lists()
 
+    def flush(self, amount):
+        if amount <= 0:
+            return 0
+
+        flushed = 0
+
+        self.inactive.reverse()
+        for block in self.inactive:
+            if block.dirty:
+                if flushed + block.size <= amount:
+                    block.dirty = False
+                    self.dirty -= block.size
+                    flushed += block.size
+                elif flushed < amount < flushed + block.size:
+                    blk_flushed = amount - flushed
+                    flushed += blk_flushed
+                    block.size -= blk_flushed
+                    self.dirty -= blk_flushed
+                    new_block = Block(block.filename, blk_flushed, dirty=False, last_access=block.last_access)
+                    self.inactive.append(new_block)
+                else:
+                    break
+
+        if flushed < amount:
+            self.active.reverse()
+            for block in self.active:
+                if block.dirty:
+                    if flushed + block.size <= amount:
+                        block.dirty = False
+                        self.dirty -= block.size
+                        flushed += block.size
+                    elif flushed < amount < flushed + block.size:
+                        blk_flushed = amount - flushed
+                        flushed += blk_flushed
+                        block.size -= blk_flushed
+                        self.dirty -= blk_flushed
+                        new_block = Block(block.filename, blk_flushed, dirty=False, last_access=block.last_access)
+                        self.active.append(new_block)
+                    else:
+                        break
+
+        self.update_lru_lists()
+
+        return flushed
+
     def update_lru_lists(self):
         self.inactive = sorted(self.inactive, key=lambda block: block.last_access)
         self.active = sorted(self.active, key=lambda block: block.last_access)
@@ -412,7 +457,6 @@ class IOManager:
             run_time += pdflush_time
             self.memory.add_log(run_time)
 
-
         disk_bw_amt = file.size - mem_bw_amt
 
         # ============= WRITE WITH DISK BW =============
@@ -447,47 +491,8 @@ class IOManager:
         return run_time
 
     def flush(self, amount):
-        if amount <= 0:
-            return 0
-
-        flushed = 0
-
-        self.memory.inactive.reverse()
-        for block in self.memory.inactive:
-            if block.dirty:
-                if flushed + block.size <= amount:
-                    block.dirty = False
-                    self.memory.dirty -= block.size
-                    flushed += block.size
-                elif flushed < amount < flushed + block.size:
-                    blk_flushed = amount - flushed
-                    flushed += blk_flushed
-                    block.size -= blk_flushed
-                    self.memory.dirty -= blk_flushed
-                    new_block = Block(block.filename, blk_flushed, dirty=False, last_access=block.last_access)
-                    self.memory.inactive.append(new_block)
-                else:
-                    break
-
-        if flushed < amount:
-            self.memory.active.reverse()
-            for block in self.memory.active:
-                if block.dirty:
-                    if flushed + block.size <= amount:
-                        block.dirty = False
-                        self.memory.dirty -= block.size
-                    elif flushed < amount < flushed + block.size:
-                        blk_flushed = amount - flushed
-                        block.size -= blk_flushed
-                        self.memory.dirty -= blk_flushed
-                        new_block = Block(block.filename, blk_flushed, dirty=False, last_access=block.last_access)
-                        self.memory.active.append(new_block)
-                    else:
-                        break
-
-        self.memory.update_lru_lists()
-
-        return amount / self.storage.write_bw
+        flushed_amt = self.memory.flush(amount=amount)
+        return self.storage.write(flushed_amt)
 
     def period_flush(self, current_time):
         """
