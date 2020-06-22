@@ -136,18 +136,34 @@ class MemoryManager:
         self.inactive.append(block)
         self.update_lru_lists()
 
-    def pdflush(self, current_time):
+    def pdflush(self, current_time, max_flushed=0):
 
         flushed = 0
         for block in self.inactive:
             if block.dirty and current_time - block.last_access > self.dirty_expire:
-                block.dirty = False
-                flushed += block.size
+                if 0 < max_flushed < flushed + block.size:
+                    flushed += max_flushed - flushed
+                    # split the block, new clean block is created
+                    new_blk = Block(block.filename, max_flushed - flushed, dirty=False,
+                                    last_access=block.last_access)
+                    self.inactive.append(new_blk)
+                    block.size = block.size + flushed - max_flushed
+                else:
+                    block.dirty = False
+                    flushed += block.size
 
         for block in self.active:
             if block.dirty and current_time - block.last_access > self.dirty_expire:
-                block.dirty = 0
-                flushed += block.size
+                if 0 < max_flushed < flushed + block.size:
+                    flushed += max_flushed - flushed
+                    # split the block, new clean block is created
+                    new_blk = Block(block.filename, max_flushed - flushed, dirty=False,
+                                    last_access=block.last_access)
+                    self.inactive.append(new_blk)
+                    block.size = block.size + flushed - max_flushed
+                else:
+                    block.dirty = False
+                    flushed += block.size
 
         self.dirty -= flushed
 
@@ -390,9 +406,10 @@ class IOManager:
             mem_read_time = cached_amt / self.memory.read_bw
 
             # concurrent periodical flushing if there is still dirty old data after forced flushing
-            pdflush_time = self.period_flush(run_time)
+            # periodical flushing duration is limited to cache read time
+            pdflush_time = self.period_flush(run_time, mem_read_time)
             print("\tpdflush in %.2f sec" % pdflush_time)
-            run_time += max(mem_read_time, pdflush_time)
+            run_time += mem_read_time
 
             # application occupies memory to store read data
             self.memory.free -= cached_amt
@@ -427,10 +444,6 @@ class IOManager:
         print("%.2f Start writing %s " % (run_time, file.name))
         self.memory.add_log(run_time)
 
-        # periodical flushing if needed
-        pdflush_time = self.period_flush(run_time)
-        self.memory.add_log(run_time)
-
         # ============= WRITE WITH MEMORY BW ===============
         # Write data before dirty_data is reached
         remaining_dirty = self.dirty_ratio * self.memory.get_available_memory() - self.memory.dirty
@@ -448,14 +461,14 @@ class IOManager:
             self.evict(mem_bw_amt - self.memory.free)
             mem_bw_write_time = mem_bw_amt / self.memory.write_bw
 
+            # periodically flush during cache write with memory bandwidth
+            self.period_flush(run_time, mem_bw_write_time)
+
             self.memory.write(file.name, amount=mem_bw_amt, time=run_time)
-            run_time += max(mem_bw_write_time, pdflush_time)
+            run_time += mem_bw_write_time
 
             self.memory.add_log(run_time)
             print("\tWrite to cache %d MB in %.2f sec" % (mem_bw_amt, mem_bw_write_time))
-        else:
-            run_time += pdflush_time
-            self.memory.add_log(run_time)
 
         disk_bw_amt = file.size - mem_bw_amt
 
@@ -494,7 +507,7 @@ class IOManager:
         flushed_amt = self.memory.flush(amount=amount)
         return self.storage.write(flushed_amt)
 
-    def period_flush(self, current_time):
+    def period_flush(self, current_time, duration=0):
         """
         Periodical flushing
         :param current_time: current simulated time
@@ -504,7 +517,7 @@ class IOManager:
         if current_time - self.last_pdflush > self.pdflush_interval:
             # update last flushing time
             self.last_pdflush += int((current_time - self.last_pdflush) / self.pdflush_interval) * self.pdflush_interval
-            flushed_amt = self.memory.pdflush(self.last_pdflush)
+            flushed_amt = self.memory.pdflush(self.last_pdflush, duration * self.storage.write_bw)
 
         return self.storage.write(flushed_amt)
 
@@ -517,7 +530,7 @@ class IOManager:
         self.memory.free += file.size
 
     def compute(self, start_time, cpu_time=0):
-        self.period_flush(start_time + cpu_time)
+        self.period_flush(start_time + cpu_time, cpu_time)
         return start_time + cpu_time
 
     def get_dirty_threshold(self):

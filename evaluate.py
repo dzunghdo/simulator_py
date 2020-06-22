@@ -114,7 +114,7 @@ def plot_task_error(size):
 
     # atop_file =     "log/cluster/100gb/atop_mem.log"
     real_time_log = "real_log/ex1/%dgb/timestamps_pipeline.csv" % size
-    sim_py_log = "py_log/ex1/%dgb/%dgb_sim_time.csv" % (size, size)
+    sim_py_log = "py_log/ex1/new/%dgb_sim_time.csv" % size
     simgrid_log = "simgrid/ex1/timestamp_sim_exp1_%dgb.csv" % size
 
     py_error = task_time_error(real_time_log, sim_py_log)
