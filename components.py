@@ -407,8 +407,7 @@ class IOManager:
 
             # concurrent periodical flushing if there is still dirty old data after forced flushing
             # periodical flushing duration is limited to cache read time
-            pdflush_time = self.period_flush(run_time, mem_read_time)
-            print("\tpdflush in %.2f sec" % pdflush_time)
+            self.period_flush(run_time, mem_read_time)
             run_time += mem_read_time
 
             # application occupies memory to store read data
@@ -510,6 +509,7 @@ class IOManager:
     def period_flush(self, current_time, duration=0):
         """
         Periodical flushing
+        :param duration:
         :param current_time: current simulated time
         :return: flushing time
         """
